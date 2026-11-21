@@ -4,8 +4,11 @@
 > nearby gas stations and their live prices on an interactive map.
 
 GasHop locates fuel stations around the user, compares **Diesel / E5 / E10**
-prices, and lets drivers save favourites for quick checks. Station lookups are
-powered by a PostGIS geospatial query running on Supabase, and the map is
+prices, and lets drivers save favourites for quick checks. Station data comes
+from the [Tankerkönig](https://creativecommons.tankerkoenig.de/) fuel-price API,
+which a **Supabase Edge Function pulls on a schedule** and caches in Postgres —
+so the app serves many users from the cache instead of hammering the upstream
+API. Nearby-station lookups run as a PostGIS geospatial query, and the map is
 rendered with OpenStreetMap tiles — no proprietary map SDK required.
 
 ---
@@ -42,7 +45,37 @@ lib/
 └── utils/                        # Navigation helpers, debouncer
 ```
 
-**Data flow:** `UI → FuelStationState (ChangeNotifier) → GasHopService → Supabase RPC (get_nearby_stations) → PostGIS`
+**Client data flow:** `UI → FuelStationState (ChangeNotifier) → GasHopService → Supabase RPC (get_nearby_stations) → PostGIS`
+
+## 🔌 Backend & Data Pipeline
+
+> The backend lives **outside this repository** — this repo is the Flutter
+> client. It's documented here so the full architecture is clear.
+
+Prices and coordinates originate from the **Tankerkönig** fuel-price API. To
+stay within Tankerkönig's fair-use limits and keep the app fast, GasHop does
+**not** call that API from the device. Instead:
+
+```
+Tankerkönig API
+      │  (scheduled pull)
+      ▼
+Supabase Edge Function  ──► writes/updates ──►  Postgres + PostGIS
+                                                      │
+                                      get_nearby_stations(lat, lng, radius_km)
+                                                      │  (RPC)
+                                                      ▼
+                                              Flutter app (this repo)
+```
+
+- **Ingestion** — a **Supabase Edge Function** runs on a schedule, fetches the
+  latest station prices from Tankerkönig, and upserts them into the database.
+- **Caching** — all client reads hit the cached Postgres data, so thousands of
+  users can be served without flooding the upstream Tankerkönig API.
+- **Geospatial query** — `get_nearby_stations` is a PostGIS RPC that returns
+  stations within a given radius of the user, with distance computed in-database.
+- **Client** — the Flutter app only ever talks to Supabase, never directly to
+  Tankerkönig.
 
 ## 🧰 Tech Stack
 
@@ -51,6 +84,8 @@ lib/
 | Framework       | Flutter (Dart)                           |
 | State           | `provider` (`ChangeNotifier`)            |
 | Backend         | Supabase (PostgreSQL + PostGIS RPC)      |
+| Data ingestion  | Supabase Edge Function (scheduled)       |
+| Data source     | Tankerkönig fuel-price API               |
 | Maps            | `flutter_map` + `latlong2` (OpenStreetMap)|
 | Networking      | `http`, `url_launcher`                   |
 | Monetization    | `google_mobile_ads` (Google test units) |
@@ -106,10 +141,12 @@ This project keeps all environment-specific values out of version control:
 - **`dart_define.json`, `*.env`, keystores, `local.properties`** → all
   git-ignored (see [`.gitignore`](.gitignore))
 
+## 🙏 Data Attribution
+
+Fuel-price data is provided by the [Tankerkönig](https://creativecommons.tankerkoenig.de/)
+API, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Map tiles © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
+
 ## 📄 License
 
 Released under the [MIT License](LICENSE).
-
-## 👤 Author
-
-**Kadir Yavuz** — sole author and maintainer.
